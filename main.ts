@@ -27,6 +27,7 @@ const TAKE_PROFIT_BPS = 200n; // full exit at +200bps from the entry close
 const PARTIAL_AT_BPS = 100n; // sell half the position at +100bps (tp / 2)
 const TRAILING_STOP_BPS = 80n; // full exit when close falls 80bps below the peak close
 const STOP_LOSS_BPS = 200n; // full exit at -200bps from the entry close
+const REENTRY_COOLDOWN_BARS = 60; // after a full exit, ignore new breakouts for 60 bars
 const MAX_SLIPPAGE_BPS = 200; // per-order cap vs the latest close
 const BPS = 10_000n;
 
@@ -36,6 +37,7 @@ let inPosition = false;
 let entryClose = 0n; // close of the bar on which the buy was decided
 let peakClose = 0n; // highest close seen since entry
 let halfSold = false; // the +100bps partial sale already happened
+let exitBar = -1; // bar index (highs.length) of the last full exit, -1 = never exited
 
 /** Highest high of the `n` bars before the latest one (the current bar excluded). */
 function trailingHigh(n: number): bigint | null {
@@ -70,6 +72,9 @@ await runBars({
       // A buy decided on a warm-up batch would be rejected; the dev kit has no
       // warm-up, and the guard below also keeps us out until history is full.
       if (state.warmingUp) return [];
+      // Re-entry cooldown: after a full exit, a fresh breakout within 60 bars
+      // is usually the same leg whipsawing, not a new trend; skip it.
+      if (exitBar >= 0 && highs.length - exitBar < REENTRY_COOLDOWN_BARS) return [];
       const hh = trailingHigh(LOOKBACK_BARS);
       if (hh === null) return [];
       // close >= hh * (1 + 20bps), in integers: close * 10000 >= hh * 10020.
@@ -103,6 +108,7 @@ await runBars({
     if (gain >= TAKE_PROFIT_BPS || gain <= -STOP_LOSS_BPS || pullback >= TRAILING_STOP_BPS) {
       inPosition = false;
       halfSold = false;
+      exitBar = highs.length; // bar count at the full exit; re-entry blocked for 60 bars
       return [{ side: 'sell', symbol: SYMBOL, qty, max_slippage_bps: MAX_SLIPPAGE_BPS }];
     }
     return [];
